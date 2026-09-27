@@ -20,6 +20,10 @@ class BagOfWords:
     def map_to_words(
         self, descriptors: NDArray, k: int, matcher_type: str = "FLANN"
     ) -> NDArray:
+        # Featureless image (black or fully masked frame): cv2's knnSearch
+        # returns None for an empty query, which save_words can't handle.
+        if len(descriptors) == 0:
+            return np.zeros((0, k), dtype=np.int32)
         if matcher_type == "FLANN":
             params = {"checks": 200}
             idx, dist = self.index.knnSearch(descriptors, k, params=params)

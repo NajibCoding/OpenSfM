@@ -92,3 +92,15 @@ def test_map_to_words_bruteforce() -> None:
     descriptors = np.random.RandomState(0).rand(5, 128).astype(np.float32)
     idx = b.map_to_words(descriptors, k=2, matcher_type="BruteForce")
     assert idx.shape == (5, 2)
+
+
+def test_map_to_words_no_descriptors() -> None:
+    """An image with zero features maps to an empty (0, k) array, not None.
+
+    cv2's knnSearch hands back None for an empty query, which crashed
+    save_words for fully masked or featureless (e.g. black) frames.
+    """
+    b = _make_bow(50, 128)
+    idx = b.map_to_words(np.zeros((0, 128), dtype=np.float32), k=3)
+    assert idx.shape == (0, 3)
+    assert idx.dtype == np.int32
