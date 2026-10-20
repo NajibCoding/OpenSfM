@@ -381,7 +381,11 @@ class DataSet(DataSetBase):
         self.io_handler.mkdir_p(self._matches_path())
 
         with BytesIO() as buffer:
-            with gzip.GzipFile(fileobj=buffer, mode="w") as fzip:
+            # Level 1, not GzipFile's default 9: on match indices 9 runs at
+            # ~1.7 MB/s for about the same size, and a 1505-frame dataset (563
+            # MB of matches) sat here 9 minutes on a RunPod pod. Level 1 takes
+            # seconds for 4% more disk.
+            with gzip.GzipFile(fileobj=buffer, mode="w", compresslevel=1) as fzip:
                 pickle.dump(matches, fzip)
             with self.io_handler.open_wb(self._matches_file(image)) as fw:
                 fw.write(buffer.getvalue())
