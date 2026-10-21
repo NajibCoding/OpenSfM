@@ -828,11 +828,16 @@ def bow_distances(
     other = [im2 for im2 in other_images if im2 != image and im2 in histograms]
     h = histograms[image]
     distances = []
-    # Blocks of rows, not one pair per call: per pair, Python held the GIL
-    # longer than numpy worked, so the threads ran on about one core. A row
-    # sums the way the 1-D sum did, so the distances are bit-identical.
-    for i in range(0, len(other), 64):
-        d = h - np.array([histograms[im2] for im2 in other[i : i + 64]])
+    # Eight rows at a time in one reused buffer, not one pair per call: per
+    # pair, the 12 threads fought over the GIL and ran like one. 8 rows
+    # (640 KB) stay in cache; 32 or 64 rows, or a new array per block, were
+    # slower than one pair at a time. A row sums the way the 1-D sum did, so
+    # the distances are bit-identical.
+    block = np.empty((8, len(h)), h.dtype)
+    for i in range(0, len(other), 8):
+        d = block[: min(8, len(other) - i)]
+        np.stack([histograms[im2] for im2 in other[i : i + 8]], out=d)
+        np.subtract(h, d, out=d)
         distances.extend(np.fabs(d, out=d).sum(axis=1))
     return image, distances, other
 
