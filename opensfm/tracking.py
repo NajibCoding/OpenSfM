@@ -104,6 +104,7 @@ def _link_matches(
         return []
 
     seq = np.concatenate(keys)
+    del keys  # the per-pair copies, before np.unique adds its own
     nodes, first_seen, node_of = np.unique(seq, return_index=True, return_inverse=True)
     graph = sparse.coo_matrix(
         (np.ones(len(seq) // 2, dtype=np.int32), (node_of[0::2], node_of[1::2])),
