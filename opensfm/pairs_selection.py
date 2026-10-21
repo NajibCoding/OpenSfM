@@ -836,7 +836,7 @@ def bow_distances(
     block = np.empty((8, len(h)), h.dtype)
     for i in range(0, len(other), 8):
         d = block[: min(8, len(other) - i)]
-        np.stack([histograms[im2] for im2 in other[i : i + 8]], out=d)
+        np.stack([histograms[im2] for im2 in other[i : i + 8]], out=d, casting="no")
         np.subtract(h, d, out=d)
         distances.extend(np.fabs(d, out=d).sum(axis=1))
     return image, distances, other
