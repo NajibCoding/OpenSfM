@@ -168,6 +168,8 @@ def match_images_with_pairs(
         matches = [match_unwrap_args(a) for a in args]
     else:
         logger.info("Computing pair matching with %d processes" % processes)
+        # Pairs grouped by image, so the shared feature caches keep hitting.
+        args.sort(key=lambda a: (a[0], a[1]))
         matches = context.parallel_map(
             match_unwrap_args, args, processes, jobs_per_process)
     logger.info(
@@ -179,11 +181,11 @@ def match_images_with_pairs(
         )
     )
 
-    # Index results per pair
+    # Index results per pair, in the order of `pairs`
     resulting_pairs = {}
     for im1, im2, m in matches:
         resulting_pairs[im1, im2] = m
-    return resulting_pairs
+    return {(im1, im2): resulting_pairs[im1, im2] for im1, im2 in pairs}
 
 
 def log_projection_types(
@@ -658,8 +660,7 @@ def _match_robust_impl(
     # robust matching
     rmatches = robust_match(p1, p2, camera1, camera2,
                             matches, overriden_config)
-    rmatches = np.array([[a, b] for a, b in rmatches])
-    return rmatches
+    return rmatches if len(rmatches) else np.array([])
 
 
 def match(
@@ -956,7 +957,7 @@ def compute_inliers_bearings(
     R: NDArray,
     t: NDArray,
     threshold: float = 0.01,
-) -> List[bool]:
+) -> NDArray:
     """Compute points that can be triangulated.
 
     Args:
@@ -970,12 +971,16 @@ def compute_inliers_bearings(
     """
     p = pygeometry.triangulate_two_bearings_midpoint_many(b1, b2, R, t)
 
-    good_idx = [i for i in range(len(p)) if p[i][0]]
-    points = np.array([p[i][1] for i in range(len(p)) if p[i][0]])
-
-    inliers = [False] * len(b1)
-    if len(points) < 1:
+    # One pass over the (ok, point) pairs instead of a Python loop per
+    # element: this runs under the GIL, which the matching threads share.
+    inliers = np.zeros(len(b1), dtype=bool)
+    if not p:
         return inliers
+    ok, points = zip(*p)
+    good_idx = np.flatnonzero(ok)
+    if len(good_idx) < 1:
+        return inliers
+    points = np.array(points)[good_idx]
 
     br1 = points.copy()
     br1 /= np.linalg.norm(br1, axis=1)[:, np.newaxis]
@@ -984,10 +989,7 @@ def compute_inliers_bearings(
 
     ok1 = np.linalg.norm(br1 - b1[good_idx], axis=1) < threshold
     ok2 = np.linalg.norm(br2 - b2[good_idx], axis=1) < threshold
-    is_ok = ok1 * ok2
-
-    for i, ok in enumerate(is_ok):
-        inliers[good_idx[i]] = ok
+    inliers[good_idx] = ok1 * ok2
     return inliers
 
 
@@ -1077,9 +1079,12 @@ def robust_match(
 
 def unfilter_matches(matches: NDArray, m1: NDArray, m2: NDArray) -> NDArray:
     """Given matches and masking arrays, get matches with un-masked indexes."""
+    if len(matches) == 0:
+        return np.array([])
+    matches = np.asarray(matches)
     i1 = np.flatnonzero(m1)
     i2 = np.flatnonzero(m2)
-    return np.array([(i1[match[0]], i2[match[1]]) for match in matches])
+    return np.column_stack((i1[matches[:, 0]], i2[matches[:, 1]]))
 
 
 def apply_adhoc_filters(

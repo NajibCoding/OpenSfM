@@ -151,3 +151,17 @@ def test_triangulation_inliers(
 
         inliers = matching.compute_inliers_bearings(f1, f2, Rt[:, :3], Rt[:, 3])
         assert sum(inliers) >= len(f1) - count_outliers
+
+
+def test_triangulation_inliers_keep_their_index() -> None:
+    points = np.array([[0.0, 0.0, 5.0], [1.0, 1.0, 6.0], [-1.0, 0.5, 4.0], [0.5, -1.0, 7.0]])
+    R, t = np.eye(3), np.array([1.0, 0.0, 0.0])
+    b1 = points / np.linalg.norm(points, axis=1)[:, np.newaxis]
+    b2 = points - t
+    b2 /= np.linalg.norm(b2, axis=1)[:, np.newaxis]
+    b2[1] = b1[1]  # parallel rays: no triangulation
+    b2[2] += 0.2  # triangulates, but off by far more than the threshold
+    b2[2] /= np.linalg.norm(b2[2])
+
+    inliers = matching.compute_inliers_bearings(b1, b2, R, t)
+    assert list(inliers) == [True, False, False, True]
