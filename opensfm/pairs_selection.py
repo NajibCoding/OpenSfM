@@ -825,14 +825,15 @@ def bow_distances(
     if image not in histograms:
         return image, [], []
 
-    distances = []
-    other = []
+    other = [im2 for im2 in other_images if im2 != image and im2 in histograms]
     h = histograms[image]
-    for im2 in other_images:
-        if im2 != image and im2 in histograms:
-            h2 = histograms[im2]
-            distances.append(np.fabs(h - h2).sum())
-            other.append(im2)
+    distances = []
+    # Blocks of rows, not one pair per call: per pair, Python held the GIL
+    # longer than numpy worked, so the threads ran on about one core. A row
+    # sums the way the 1-D sum did, so the distances are bit-identical.
+    for i in range(0, len(other), 64):
+        d = h - np.array([histograms[im2] for im2 in other[i : i + 64]])
+        distances.extend(np.fabs(d, out=d).sum(axis=1))
     return image, distances, other
 
 
@@ -840,24 +841,27 @@ def load_histograms(data: DataSetBase, images: Iterable[str]) -> Dict[str, NDArr
     """Load BoW histograms of given images"""
     min_num_feature = 8
 
-    histograms = {}
     bows = bow.load_bows(data.config)
-    for im in images:
+
+    def histogram(im: str) -> Optional[NDArray]:
         filtered_words = feature_loader.instance.load_words(
             data, im, masked=True)
         if filtered_words is None:
             logger.error("No words in image {}".format(im))
-            continue
+            return None
         if len(filtered_words) <= min_num_feature:
             logger.warning(
                 "Too few filtered features in image {}: {}".format(
                     im, len(filtered_words)
                 )
             )
-            continue
+            return None
+        return bows.histogram(filtered_words[:, 0])
 
-        histograms[im] = bows.histogram(filtered_words[:, 0])
-    return histograms
+    # Threads: loading is mostly file reads and zlib, which drop the GIL.
+    images = list(images)
+    hs = context.parallel_map(histogram, images, data.config["processes"])
+    return {im: h for im, h in zip(images, hs) if h is not None}
 
 
 def vlad_histogram_unwrap_args(

@@ -400,3 +400,30 @@ def test_construct_pairs_enforce_other_cameras() -> None:
     # Should have 1 same-camera (im2) + 1 other-camera (im3)
     assert ("im1", "im2") in sorted_keys
     assert ("im1", "im3") in sorted_keys
+
+
+# ── bow_distances ────────────────────────────────────────────────────
+
+
+def test_bow_distances_bit_identical_to_one_pair_at_a_time() -> None:
+    """Distances equal the per-pair L1 sum to the bit, in candidate order,
+    skipping the image itself and images without a histogram."""
+    rng = np.random.default_rng(0)
+    names = ["im%03d" % i for i in range(150)]  # spans several row blocks
+    histograms = {}
+    for im in names:
+        h = rng.random(10000) * (rng.random(10000) < 0.3)
+        histograms[im] = h / h.sum()
+    del histograms["im077"]
+    candidates = names[::-1]
+
+    image, distances, other = pairs_selection.bow_distances(
+        "im010", candidates, histograms)
+
+    expected = [im for im in candidates if im not in ("im010", "im077")]
+    assert image == "im010"
+    assert other == expected
+    h = histograms["im010"]
+    assert [d.tobytes() for d in distances] == [
+        np.fabs(h - histograms[im]).sum().tobytes() for im in expected
+    ]
