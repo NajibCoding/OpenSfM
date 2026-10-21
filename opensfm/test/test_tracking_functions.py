@@ -32,6 +32,35 @@ def test_good_track_empty() -> None:
     assert not tracking._good_track([], min_length=1)
 
 
+# ── create_tracks_manager_from_matches_iter ──────────────────────────
+
+
+def test_tracks_numbered_by_first_seen_feature() -> None:
+    """Track ids follow the order features first appear in the matches,
+    and a component holding two features of one image is dropped."""
+    features = {im: np.array([[i, 10 * i, 0.5] for i in range(6)], dtype=float)
+                for im in "ABC"}
+    colors = {im: np.array([[i, i, i] for i in range(6)]) for im in "ABC"}
+    matches = [
+        (("A", "B"), np.array([[2, 2], [0, 1], [1, 0], [4, 4]])),
+        (("B", "C"), np.array([[1, 0], [2, 1], [5, 3]])),
+        (("A", "C"), np.array([[0, 0], [4, 3]])),
+    ]
+    tm = tracking.create_tracks_manager_from_matches_iter(
+        features, colors, {}, {}, lambda: iter(matches), 2, {})
+
+    tracks = {t: {im: o.id for im, o in tm.get_track_observations(t).items()}
+              for t in tm.get_track_ids()}
+    assert tracks == {
+        "0": {"A": 2, "B": 2, "C": 1},
+        "1": {"A": 0, "B": 1, "C": 0},
+        "2": {"A": 1, "B": 0},
+    }
+    obs = tm.get_observation("C", "0")
+    assert list(obs.point) == [1.0, 10.0] and obs.scale == 0.5
+    assert list(obs.color) == [1, 1, 1]
+
+
 # ── common_tracks ────────────────────────────────────────────────────
 
 

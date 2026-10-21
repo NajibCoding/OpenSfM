@@ -9,7 +9,8 @@ from numpy.typing import NDArray
 from opensfm import context, pymap
 from opensfm.dataset_base import DataSetBase
 from opensfm.pymap import TracksManager
-from opensfm.unionfind import UnionFind
+from scipy import sparse
+from scipy.sparse import csgraph
 
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -78,6 +79,54 @@ def load_matches(
                 yield (im1, im2), im1_matches[im2]
 
 
+def _link_matches(
+    matches: t.Iterator[Tuple[Tuple[str, str], List[Tuple[int, int]]]],
+) -> List[List[Tuple[str, int]]]:
+    """Group matched features into tracks, all pairs at once.
+
+    The same groups in the same order as a UnionFind fed pair by pair: tracks
+    are ordered by the first appearance of any of their features in `matches`
+    and list their features in order of first appearance. That order numbers
+    the tracks.
+    """
+    image_ids: Dict[str, int] = {}
+    keys = []
+    for (im1, im2), pairs in matches:
+        pairs = np.asarray(pairs, dtype=np.int64).reshape(-1, 2)
+        if len(pairs) == 0:
+            continue
+        # (image, feature) as one int64, the image id in the high 32 bits
+        k = np.empty(2 * len(pairs), dtype=np.int64)
+        k[0::2] = (image_ids.setdefault(im1, len(image_ids)) << 32) | pairs[:, 0]
+        k[1::2] = (image_ids.setdefault(im2, len(image_ids)) << 32) | pairs[:, 1]
+        keys.append(k)
+    if not keys:
+        return []
+
+    seq = np.concatenate(keys)
+    nodes, first_seen, node_of = np.unique(seq, return_index=True, return_inverse=True)
+    graph = sparse.coo_matrix(
+        (np.ones(len(seq) // 2, dtype=np.int32), (node_of[0::2], node_of[1::2])),
+        shape=(len(nodes), len(nodes)),
+    )
+    _, component = csgraph.connected_components(graph, directed=False)
+
+    # Nodes in first-seen order, grouped by their component's rank: where the
+    # component's first-seen node falls in that order.
+    order = np.argsort(first_seen)
+    comp_in_order = component[order]
+    _, comp_first = np.unique(comp_in_order, return_index=True)
+    rank = np.empty_like(comp_first)
+    rank[np.argsort(comp_first)] = np.arange(len(comp_first))
+    grouped = nodes[order[np.argsort(rank[comp_in_order], kind="stable")]]
+
+    names = list(image_ids)
+    feats = list(zip([names[i] for i in (grouped >> 32).tolist()],
+                     (grouped & 0xFFFFFFFF).tolist()))
+    ends = np.cumsum(np.bincount(rank[component])).tolist()
+    return [feats[a:b] for a, b in zip([0] + ends[:-1], ends)]
+
+
 def create_tracks_manager_from_matches_iter(
     features: Dict[str, NDArray[np.float64]],
     colors: Dict[str, NDArray[np.int32]],
@@ -93,20 +142,7 @@ def create_tracks_manager_from_matches_iter(
     logger.debug("Merging features onto tracks")
 
     logger.debug("Running union-find to find aggregated tracks")
-    uf = UnionFind()
-    for (im1, im2), pairs in matches():
-        for f1, f2 in pairs:
-            uf.union((im1, f1), (im2, f2))
-
-    sets = {}
-    for i in uf:
-        p = uf[i]
-        if p in sets:
-            sets[p].append(i)
-        else:
-            sets[p] = [i]
-
-    tracks = [t for t in sets.values() if _good_track(t, min_length)]
+    tracks = [t for t in _link_matches(matches()) if _good_track(t, min_length)]
 
     logger.debug("Constructing TracksManager from tracks")
     NO_VALUE = pymap.Observation.NO_SEMANTIC_VALUE
